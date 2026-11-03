@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSU StudSpot - Interactive Library Kiosk</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons & FontAwesome -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- QR Code Generator & Real-time Optical Barcode/QR Decoders -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script src="https://unpkg.com/@zxing/library@latest"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        tsu: {
+                            gold: '#EAB308',
+                            maroon: '#800000',
+                            bg: '#0B101D',
+                            card: '#121929',
+                            cardborder: '#1E293B',
+                            hover: '#1E293B',
+                            accent: '#059669',
+                            pending: '#D97706',
+                            occupied: '#DC2626'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            background-color: #0B101D;
+            color: #F8FAFC;
+        }
+
+        /* Laser Scanner Motion */
+        .laser-line {
+            height: 3px;
+            background: linear-gradient(90deg, transparent, #ef4444, #f59e0b, #ef4444, transparent);
+            box-shadow: 0 0 15px #ef4444;
+            animation: scan 2s infinite ease-in-out;
+        }
+
+        @keyframes scan {
+            0% { top: 12%; opacity: 0.8; }
+            50% { top: 85%; opacity: 1; }
+            100% { top: 12%; opacity: 0.8; }
+        }
+
+        .touch-active:active {
+            transform: scale(0.97);
+            filter: brightness(0.9);
+        }
+
+        /* Use the real visible height on phones/tablets (100vh hides content under browser toolbars) */
+        @supports (height: 100dvh) {
+            .app-body { min-height: 100dvh; }
+            @media (min-width: 768px) {
+                .app-body { height: 100dvh; }
+            }
+        }
+        #app-sidebar { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0B101D;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="app-body min-h-screen md:h-screen w-full flex flex-col md:overflow-hidden overflow-x-hidden">
+
+    <!-- 1. KIOSK AUTHENTICATION OVERLAY / LANDING SCREEN WITH REAL CAMERA SCANNER -->
+    <div id="kiosk-auth-modal" class="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col justify-between p-6 overflow-y-auto">
+        
+        <!-- Auth Header -->
+        <div class="flex justify-between items-center border-b border-slate-800 pb-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-12 h-12 bg-tsu-gold text-slate-950 font-black rounded-xl flex items-center justify-center text-xl shadow-lg">
+                    TSU
+                </div>
+                <div>
+                    <h1 class="text-xl font-extrabold text-white tracking-wide">TARLAC STATE UNIV. STUDENT ACCESS PORTAL</h1>
+                    <p class="text-xs text-amber-400 font-semibold">Self-Service Touchscreen Reservation Terminal</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auth Main Interactive Box -->
+        <div class="flex-1 flex flex-col md:flex-row items-center justify-center gap-8 max-w-6xl mx-auto w-full my-4">
+            
+            <!-- Real Optical Webcam 1D Barcode & QR Scanner -->
+            <div class="flex-1 w-full bg-slate-900/90 rounded-3xl p-6 border border-slate-800 flex flex-col justify-between h-full min-h-[440px]">
+                <div>
+                    <span class="bg-emerald-500/10 text-emerald-400 text-[11px] font-bold px-3 py-1 rounded-full uppercase border border-emerald-500/20">Mode 1: Optical Barcode Camera Reader</span>
+                    <h2 class="text-2xl font-black text-white mt-3">Scan Student ID Barcode</h2>
+                    <p class="text-xs text-slate-400 mt-1">Hold the 1D barcode on the back of your TSU Student ID in front of the scanner camera.</p>
+                </div>
+
+                <!-- Camera Viewfinder with Real-Time Decoded Tracker -->
+                <div class="my-4 relative bg-black rounded-2xl overflow-hidden border-2 border-slate-700 aspect-video flex items-center justify-center shadow-inner">
+                    <video id="webcam-preview" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                    <canvas id="scan-canvas" class="hidden"></canvas>
+                    <div class="laser-line absolute inset-x-0"></div>
+                    
+                    <!-- Viewfinder Frame -->
+                    <div id="viewfinder-overlay" class="absolute w-3/4 h-2/3 border-2 border-dashed border-tsu-gold/80 rounded-xl flex flex-col items-center justify-center p-4 pointer-events-none z-10">
+                        <i class="fa-solid fa-barcode text-4xl text-tsu-gold mb-2 animate-pulse"></i>
+                        <p id="scanner-status" class="text-xs text-slate-200 font-semibold bg-black/60 px-3 py-1 rounded-full text-center">Align ID Barcode in Camera View...</p>
+                    </div>
+
+                    <!-- CAMERA WAKE / PERMISSION INTERACTIVE BUTTON OVERLAY -->
+                    <div id="camera-permission-btn-overlay" class="hidden absolute inset-0 bg-slate-950/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center p-4 text-center">
+                        <i class="fa-solid fa-video-slash text-3xl text-amber-400 mb-2"></i>
+                        <p class="text-xs text-slate-300 font-medium mb-3">Camera access required or blocked by browser settings.</p>
+                        <button onclick="requestCameraAccessExplicit()" class="touch-active bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-5 py-2.5 rounded-xl border border-emerald-400/40 shadow-lg flex items-center gap-2">
+                            <i class="fa-solid fa-camera"></i> Enable & Start Camera Scanner
+                        </button>
+                    </div>
+
+                    <!-- REAL-TIME LIVE DECODED ID TRACKER OVERLAY -->
+                    <div class="absolute bottom-3 inset-x-4 bg-slate-950/90 border border-emerald-500/50 backdrop-blur-md rounded-xl p-3 flex items-center justify-between z-20">
+                        <div>
+                            <span class="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Live Decoded ID Tracker</span>
+                            <div id="live-decoded-id" class="text-lg font-mono font-black text-tsu-gold">-- SCANNING --</div>
+                        </div>
+                        <div id="scan-confirm-badge" class="bg-slate-800 text-slate-400 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-slate-700 flex items-center gap-1.5">
+                            <i class="fa-solid fa-circle-notch fa-spin text-amber-400"></i> Waiting for barcode...
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-center text-[11px] text-slate-400 bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
+                    <span class="text-xs text-slate-400 font-medium">
+                        <i class="fa-solid fa-camera text-emerald-400 mr-1"></i> Live Optical Scanner Active
+                    </span>
+                    <button onclick="requestCameraAccessExplicit()" class="text-xs text-amber-400 font-bold hover:underline flex items-center gap-1">
+                        <i class="fa-solid fa-arrows-rotate"></i> Restart Scanner
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Numpad Entry -->
+            <div class="flex-1 w-full bg-slate-900/90 rounded-3xl p-6 border border-slate-800 flex flex-col justify-between h-full min-h-[440px]">
+                <div>
+                    <span class="bg-amber-500/10 text-amber-400 text-[11px] font-bold px-3 py-1 rounded-full uppercase border border-amber-500/20">Mode 2: Manual Keypad</span>
+                    <h2 class="text-2xl font-black text-white mt-2">Type Student ID Code</h2>
+                    <p class="text-xs text-slate-400">Enter your 10-digit TSU Student Number.</p>
+                </div>
+
+                <div class="relative my-3">
+                    <input type="text" id="kiosk-id-display" placeholder="Enter ID Code..." class="w-full bg-slate-950 border-2 border-slate-700 rounded-2xl px-4 py-3 text-center text-2xl font-mono font-bold tracking-widest text-tsu-gold focus:outline-none">
+                    <button onclick="clearNumpad()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 text-lg">
+                        <i class="fa-solid fa-circle-xmark"></i>
+                    </button>
+                </div>
+
+                <!-- Touch Grid -->
+                <div class="grid grid-cols-3 gap-2 my-1">
+                    <button onclick="appendNumpad('1')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">1</button>
+                    <button onclick="appendNumpad('2')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">2</button>
+                    <button onclick="appendNumpad('3')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">3</button>
+                    <button onclick="appendNumpad('4')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">4</button>
+                    <button onclick="appendNumpad('5')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">5</button>
+                    <button onclick="appendNumpad('6')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">6</button>
+                    <button onclick="appendNumpad('7')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">7</button>
+                    <button onclick="appendNumpad('8')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">8</button>
+                    <button onclick="appendNumpad('9')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">9</button>
+                    <button onclick="clearNumpad()" class="touch-active bg-red-950/60 text-red-300 font-bold text-xs py-3 rounded-xl border border-red-800/50">CLR</button>
+                    <button onclick="appendNumpad('0')" class="touch-active bg-slate-800 hover:bg-slate-700 text-white font-bold text-xl py-3 rounded-xl border border-slate-700">0</button>
+                    <button onclick="backspaceNumpad()" class="touch-active bg-slate-800 text-slate-300 font-bold py-3 rounded-xl border border-slate-700"><i class="fa-solid fa-delete-left"></i></button>
+                </div>
+
+                <button onclick="submitNumpadLogin()" class="w-full mt-2 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-lg py-3 rounded-2xl shadow-lg flex items-center justify-center gap-2 touch-active">
+                    <span>Confirm Student Login</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="text-center text-xs text-slate-500 border-t border-slate-800 pt-3">
+            Tarlac State University Student Access Portal • Touch Kiosk Terminal • Dynamic ID Code Lookup System
+        </div>
+    </div>
+
+
+    <!-- 2. MAIN APPLICATION WORKSPACE -->
+    <div class="flex-1 flex md:overflow-hidden">
+
+        <!-- MOBILE SIDEBAR BACKDROP -->
+        <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-30 hidden md:hidden"></div>
+
+        <!-- SIDEBAR NAVIGATION -->
+        <aside id="app-sidebar" class="fixed md:static inset-y-0 left-0 z-40 w-72 max-w-[85vw] bg-tsu-card border-r border-slate-800 flex flex-col justify-between p-4 flex-shrink-0 transform -translate-x-full md:translate-x-0 transition-transform duration-200 md:overflow-y-auto">
+            <div>
+                <!-- Top Student Profile Box -->
+                <div class="bg-slate-900/80 rounded-2xl p-3 border border-slate-800 flex items-center space-x-3 mb-6">
+                    <div id="user-avatar-badge" class="w-10 h-10 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-sm">
+                        JG
+                    </div>
+                    <div class="overflow-hidden">
+                        <h3 id="sidebar-user-name" class="text-xs font-bold text-slate-100 truncate">Jemaima Kisha De Gu...</h3>
+                        <p class="text-[11px] text-slate-400 font-mono">ID: <span id="sidebar-user-id" class="text-amber-400 font-semibold">2025102298</span></p>
+                        <span class="inline-block bg-emerald-500/10 text-emerald-400 text-[9px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/20">Regular Student</span>
+                    </div>
+                </div>
+
+                <!-- Navigation Section -->
+                <div class="space-y-1">
+                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 mb-2">MAIN MENU</div>
+                    <a href="#" class="flex items-center space-x-3 px-3.5 py-2.5 rounded-xl bg-slate-800 text-emerald-400 font-semibold text-xs border border-slate-700">
+                        <i class="fa-solid fa-radar text-emerald-400 text-sm"></i>
+                        <span>Smart Radar</span>
+                    </a>
+                </div>
+            </div>
+
+            <div class="space-y-2 border-t border-slate-800 pt-3">
+                <button onclick="clearSessionAndExit()" class="w-full bg-red-950/40 hover:bg-red-900/60 text-red-300 text-xs font-semibold py-2 rounded-xl border border-red-800/40 flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-right-from-bracket"></i> Change Student / Exit
+                </button>
+            </div>
+        </aside>
+
+        <!-- RIGHT CONTENT AREA -->
+        <main class="flex-1 flex flex-col bg-tsu-bg overflow-hidden">
+            
+            <!-- TOP BAR -->
+            <header class="bg-tsu-card px-4 md:px-6 py-3 border-b border-slate-800 flex justify-between items-center gap-2">
+                <div class="flex items-center space-x-4 min-w-0">
+                    <button onclick="toggleSidebar()" class="md:hidden p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition touch-active">
+                        <i class="fa-solid fa-bars text-lg"></i>
+                    </button>
+                    <div class="w-8 h-8 rounded-lg bg-tsu-gold text-slate-950 font-black flex items-center justify-center text-xs shrink-0">
+                        TSU
+                    </div>
+                    <div class="text-xs font-bold text-slate-100 flex items-center gap-2 truncate">
+                        <span class="truncate">StudSpot Reservation Radar</span>
+                        <span class="hidden lg:inline-flex items-center gap-1 bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Synced with Web App</span>
+                    </div>
+                </div>
+
+                <!-- Clock & Avatar Header -->
+                <div class="flex items-center space-x-2 md:space-x-4 shrink-0">
+                    <div class="text-right">
+                        <div id="live-clock" class="text-xs md:text-sm font-mono font-bold text-amber-400">09:15:00 AM</div>
+                    </div>
+                    <div id="top-avatar-badge" class="w-8 h-8 rounded-full bg-emerald-500 text-slate-950 font-bold flex items-center justify-center text-xs">
+                        JG
+                    </div>
+                    <!-- Quick exit, always visible in the top bar on every screen size -->
+                    <button onclick="clearSessionAndExit()" title="Change Student / Exit" aria-label="Change Student / Exit" class="touch-active px-2.5 py-2 rounded-xl text-red-300 bg-red-950/60 border border-red-800/50 flex items-center justify-center gap-2 text-xs font-semibold">
+                        <i class="fa-solid fa-right-from-bracket text-sm"></i>
+                        <span class="hidden sm:inline">Change Student / Exit</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- LOCATION SELECTOR HEADER BANNER -->
+            <div class="p-4 bg-slate-900/60 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-center space-x-3">
+                    <img src="assets/studspot-logo.png" alt="StudSpot logo" class="h-10 w-auto object-contain drop-shadow shrink-0">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h2 class="text-sm font-extrabold text-white">studspot</h2>
+                            <span class="bg-amber-500 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded uppercase">OFFICIAL TSU RADAR</span>
+                        </div>
+                        <p class="text-[11px] text-slate-400">ASCE Smart Campus Seat, Room & Student Center Reservation</p>
+                    </div>
+                </div>
+
+                <!-- LOCATION DROPDOWN -->
+                <div class="relative">
+                    <div class="flex items-center bg-slate-950 border border-emerald-500/40 rounded-xl px-3 py-2 space-x-2">
+                        <i class="fa-solid fa-location-crosshairs text-emerald-400 text-xs"></i>
+                        <span class="text-xs font-semibold text-slate-400">Select Location:</span>
+                        <select id="location-select" onchange="changeLocation()" class="bg-transparent text-xs font-bold text-white focus:outline-none cursor-pointer pr-4">
+                            <option value="lucinda1" class="bg-slate-950 text-slate-100 font-semibold py-1">Lucinda Library - Floor 1 (General Reading)</option>
+                            <option value="lucinda2" class="bg-slate-950 text-slate-100 font-semibold py-1">Lucinda Library - Floor 2 (Multi-Purpose & Labs)</option>
+                            <option value="lucinda3" class="bg-slate-950 text-slate-100 font-semibold py-1">Lucinda Library - Floor 3 (Quiet Study Zone)</option>
+                            <option value="student_center" class="bg-slate-950 text-slate-100 font-semibold py-1">Student Center</option>
+                            <option value="main3" class="bg-slate-950 text-slate-100 font-semibold py-1">Main Campus Library (Floor 3)</option>
+                            <option value="engineering" class="bg-slate-950 text-slate-100 font-semibold py-1">Engineering Library (Com-Shop Workstations)</option>
+                            <option value="san_isidro" class="bg-slate-950 text-slate-100 font-semibold py-1">San Isidro Campus Library (Pods & Group Tables)</option>
+                            <option value="museo" class="bg-slate-950 text-slate-100 font-semibold py-1">Museo Archivo (Historical Gallery & Periodicals)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MAIN RADAR & SEAT MAP AREA -->
+            <div class="flex-1 p-4 overflow-y-auto space-y-4 flex flex-col">
+                
+                <div class="bg-slate-950 p-6 rounded-3xl border border-slate-800 relative shadow-2xl order-2 md:order-1">
+                    <!-- Corner Socket Indicators -->
+                    <div class="flex justify-between items-center text-[11px] text-amber-400 font-mono mb-4 px-2 font-bold">
+                        <span><i class="fa-solid fa-plug text-[10px]"></i> Corner Socket A</span>
+                        <span>Corner Socket B <i class="fa-solid fa-plug text-[10px]"></i></span>
+                    </div>
+
+                    <!-- Dynamic Grid Layout -->
+                    <div id="seats-grid-layout" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                        <!-- Rendered by JS -->
+                    </div>
+
+                    <div class="mt-6 text-center text-xs text-slate-500 flex flex-col items-center justify-center gap-2">
+                        <span class="flex items-center gap-2">
+                            <i class="fa-solid fa-hand-pointer text-amber-400"></i>
+                            <span>Click any available green seat or table to open the reservation window & generate your Digital Pass.</span>
+                        </span>
+                        <span class="text-[10px] flex items-center gap-1.5">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                            Live shared seat sync with studspot-tsu.netlify.app — updated for every student • <span id="sync-status" class="font-mono">connecting…</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- BOTTOM ACTIVE RESERVATION CARD (shown near the top on phones/tablets so it is always visible) -->
+                <div class="bg-tsu-card p-4 rounded-2xl border border-slate-800 flex flex-wrap gap-3 items-center justify-between order-1 md:order-2">
+                    <div>
+                        <div class="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Kiosk Reservation</div>
+                        <div id="active-reservation-summary" class="text-sm font-black text-white mt-0.5">
+                            No active seat reserved on this terminal.
+                        </div>
+                    </div>
+                    <div id="active-reservation-actions" class="hidden flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                        <button onclick="printKioskTicket()" class="flex-1 sm:flex-none justify-center touch-active bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 shadow">
+                            <i class="fa-solid fa-print"></i> Print QR Pass
+                        </button>
+                        <button onclick="releaseReservation()" class="flex-1 sm:flex-none touch-active bg-red-950 text-red-300 border border-red-800 text-xs px-3 py-2.5 rounded-xl font-bold hover:bg-red-900">
+                            Cancel Pass
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <!-- 3. SPOT RESERVATION MODAL EXACTLY MATCHING SCREENSHOT -->
+    <div id="reserve-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-[#111827] border border-slate-700/80 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative text-slate-100 my-auto">
+            
+            <!-- Modal Header -->
+            <div class="flex justify-between items-center border-b border-slate-800 pb-4 mb-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg">
+                        <i class="fa-solid fa-chair" id="modal-spot-icon"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-bold text-white flex items-center gap-1.5">
+                            <span>Reserve Spot:</span>
+                            <span id="modal-spot-code" class="text-amber-400 font-extrabold">Desk A-01</span>
+                        </h3>
+                    </div>
+                </div>
+                <button onclick="closeReserveModal()" class="text-slate-400 hover:text-white transition">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
+            </div>
+
+            <!-- Spot Details -->
+            <div class="bg-slate-950/80 rounded-2xl p-4 border border-slate-800/80 space-y-2 mb-4 text-xs font-medium">
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400">Location:</span>
+                    <span id="modal-spot-location" class="text-white font-bold">Lucinda Library - Floor 1</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400">Type:</span>
+                    <span id="modal-spot-type" class="text-white font-semibold">Desk Workstation</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400">Power Socket:</span>
+                    <span id="modal-spot-outlet" class="text-emerald-400 font-bold flex items-center gap-1">
+                        <i class="fa-solid fa-plug text-[10px]"></i> Power Outlet Available
+                    </span>
+                </div>
+            </div>
+
+            <!-- User Category -->
+            <div class="mb-4">
+                <label class="block text-xs font-semibold text-slate-300 mb-1.5">User Category</label>
+                <select id="user-category-select" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-emerald-500">
+                    <option value="student">Student (TSU Enrolled)</option>
+                    <option value="faculty">Faculty / Staff</option>
+                    <option value="postgrad">Graduate Student / Researcher</option>
+                </select>
+            </div>
+
+            <!-- Select Time Duration -->
+            <div class="mb-4">
+                <div class="flex justify-between items-center mb-2">
+                    <label class="text-xs font-semibold text-slate-300">Select Time Duration</label>
+                    <span class="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full font-semibold">Max Limit: 3 Hours</span>
+                </div>
+
+                <div class="grid grid-cols-4 gap-2">
+                    <button type="button" onclick="selectPresetDuration(30)" id="duration-btn-30" class="duration-btn bg-emerald-600 text-white border border-emerald-400 font-bold py-2.5 rounded-xl text-xs transition">
+                        30 Min
+                    </button>
+                    <button type="button" onclick="selectPresetDuration(60)" id="duration-btn-60" class="duration-btn bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold py-2.5 rounded-xl text-xs transition">
+                        1 Hour
+                    </button>
+                    <button type="button" onclick="selectPresetDuration(120)" id="duration-btn-120" class="duration-btn bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold py-2.5 rounded-xl text-xs transition">
+                        2 Hours
+                    </button>
+                    <button type="button" onclick="selectPresetDuration(180)" id="duration-btn-180" class="duration-btn bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold py-2.5 rounded-xl text-xs transition">
+                        3 Hours
+                    </button>
+                </div>
+            </div>
+
+            <!-- Custom Duration Input Box -->
+            <div class="bg-slate-950/90 rounded-2xl p-3 border border-slate-800 mb-6 space-y-2">
+                <div class="text-[11px] font-semibold text-slate-400">Custom Duration Input:</div>
+                <div class="flex gap-2">
+                    <div class="relative flex-1">
+                        <input type="number" id="custom-duration-input" min="1" max="180" placeholder="Enter time (e.g. 45 or 90)" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 pr-12">
+                        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 font-medium">mins</span>
+                    </div>
+                    <button type="button" onclick="addCustomDuration()" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-5 rounded-xl transition flex items-center gap-1 shadow">
+                        <i class="fa-solid fa-plus text-[10px]"></i> Add
+                    </button>
+                </div>
+                <div class="text-[10px] text-slate-400 flex items-center gap-1">
+                    <i class="fa-solid fa-rotate-left text-amber-400"></i>
+                    <span>Students may set custom time up to <strong>180 mins (3 Hours)</strong> max.</span>
+                </div>
+            </div>
+
+            <!-- Confirm Reservation Button -->
+            <button onclick="confirmModalReservation()" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm py-3.5 rounded-2xl shadow-lg transition touch-active flex items-center justify-center gap-2">
+                <span>Confirm Seat / Table Reservation</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- DIGITAL TICKET MODAL -->
+    <div id="ticket-modal" class="hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-slate-900 border-2 border-amber-500/40 rounded-3xl p-6 max-w-sm w-full text-center relative shadow-2xl my-auto">
+            <button onclick="closeTicketModal()" class="absolute right-4 top-4 text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+            
+            <div class="w-12 h-12 bg-amber-500/20 text-amber-400 rounded-full flex items-center justify-center mx-auto mb-2 text-xl">
+                <i class="fa-solid fa-circle-check"></i>
+            </div>
+            <h3 class="text-lg font-black text-white">Kiosk Reservation Pass</h3>
+            <p class="text-[11px] text-slate-400 mb-4">Scan QR at TSU Library Turnstile</p>
+
+            <div class="bg-white text-slate-900 p-4 rounded-2xl text-left font-mono shadow-inner mb-4">
+                <div class="flex justify-between items-center border-b border-slate-200 pb-2 mb-2">
+                    <span class="text-[10px] uppercase font-bold text-slate-500">TSU LIBRARY PASS</span>
+                    <span id="ticket-location-tag" class="text-[10px] font-bold bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">LUCINDA F1</span>
+                </div>
+                <div class="text-xs">
+                    <div>STUDENT: <strong id="ticket-student-name" class="text-slate-900 font-bold">Jemaima Kisha De Guzman</strong></div>
+                    <div>ID: <strong id="ticket-student-id" class="text-tsu-maroon font-bold">2025102298</strong></div>
+                    <div class="my-2 text-center py-2 bg-slate-100 rounded border border-slate-300">
+                        <span class="text-[10px] text-slate-500 block">RESERVED SPOT</span>
+                        <span id="ticket-seat-code" class="text-2xl font-black text-slate-900 tracking-wider">Desk A-01</span>
+                        <span id="ticket-duration-label" class="text-[10px] font-semibold text-emerald-700 block mt-0.5">Duration: 30 Mins</span>
+                    </div>
+                </div>
+                <!-- QR Code Box -->
+                <div class="flex justify-center my-2">
+                    <div id="qrcode-container" class="p-2 bg-white rounded"></div>
+                </div>
+                <div class="text-[9px] text-slate-500 text-center">Valid for Duration Selected • Auto-releases if unoccupied</div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 rounded-xl shadow">
+                    <i class="fa-solid fa-print"></i> Print Slip
+                </button>
+                <button onclick="closeTicketModal()" class="bg-slate-800 text-slate-200 text-xs font-bold py-2.5 rounded-xl">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT APP & ENGINE -->
+    <script>
+        const syncChannel = new BroadcastChannel('studspot_tsu_sync');
+
+        let activeStudentId = '2025102298';
+        let activeStudentName = 'Jemaima Kisha De Guzman';
+        let activeStudentInitials = 'JG';
+        let currentLocationKey = 'lucinda1';
+        let userActiveSeat = null;
+        let selectedSpotForModal = null;
+        let selectedDurationMins = 30;
+
+        let videoStream = null;
+        let isScanning = false;
+        let zxingReader = null;
+        let barcodeDetectorNative = null;
+        let lastDetectedCode = null;
+
+        let usbBarcodeBuffer = '';
+        let usbBarcodeTimeout = null;
+
+        const studentDatabase = {
+            '2025102298': { name: 'Jemaima Kisha De Guzman', initials: 'JG' },
+            '2025103396': { name: 'Jemaima Kisha De Guzman', initials: 'JG' },
+            '2025100001': { name: 'Maria Santos', initials: 'MS' },
+            '2025100002': { name: 'Juan Cruz', initials: 'JC' }
+        };
+
+        const locationsData = {
+            lucinda1: {
+                title: 'Lucinda Library - Floor 1 (General Reading)',
+                subtitle: 'General Reading area with socket-equipped study desks',
+                prefix: 'Lucinda F1',
+                seats: [
+                    { id: 'Desk A-01', type: 'desk', outlet: true },
+                    { id: 'Desk A-02', type: 'desk', outlet: true },
+                    { id: 'Desk A-03', type: 'desk', outlet: true },
+                    { id: 'Desk A-04', type: 'desk', outlet: true },
+                    { id: 'Desk A-05', type: 'desk', outlet: true },
+                    { id: 'Desk A-06', type: 'desk', outlet: true },
+                    { id: 'Desk A-07', type: 'desk', outlet: true },
+                    { id: 'Desk A-08', type: 'desk', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `L1-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: (i%2===0) }))
+                ]
+            },
+            lucinda2: {
+                title: 'Lucinda Library - Floor 2 (Multi-Purpose & Labs)',
+                subtitle: 'Individual Desks, Discussion Rooms & Innovation Labs',
+                prefix: 'Lucinda F2',
+                seats: [
+                    { id: 'MP Room 201', type: 'room', outlet: true },
+                    { id: 'MP Room 202', type: 'room', outlet: true },
+                    { id: 'MP Room 203', type: 'room', outlet: true },
+                    { id: 'Innovation Lab A', type: 'lab', outlet: true },
+                    { id: 'Innovation Lab B', type: 'lab', outlet: true },
+                    { id: 'Innovation Lab C', type: 'lab', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `L2-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            },
+            lucinda3: {
+                title: 'Lucinda Library - Floor 3 (Quiet Study Zone)',
+                subtitle: 'Silent Study Zone with Innovation Labs and Quiet Multipurpose Rooms',
+                prefix: 'Lucinda F3',
+                seats: [
+                    { id: 'MP Room 301', type: 'room', outlet: true },
+                    { id: 'MP Room 302', type: 'room', outlet: true },
+                    { id: 'MP Room 303', type: 'room', outlet: true },
+                    { id: 'Innovation Lab A', type: 'lab', outlet: true },
+                    { id: 'Innovation Lab B', type: 'lab', outlet: true },
+                    { id: 'Innovation Lab C', type: 'lab', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `L3-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            },
+            student_center: {
+                title: 'Student Center',
+                subtitle: 'Central Student Hub with Group Discussion Tables and Individual Study Spots',
+                prefix: 'Student Center',
+                seats: [
+                    { id: 'SC-Seat 01', type: 'seat', outlet: true },
+                    { id: 'SC-Seat 02', type: 'seat', outlet: true },
+                    { id: 'SC-Seat 03', type: 'seat', outlet: true },
+                    { id: 'SC-Seat 04', type: 'seat', outlet: true },
+                    { id: 'SC-Seat 05', type: 'seat', outlet: true },
+                    { id: 'Table A (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table B (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table C (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table D (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table E (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table F (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table G (6 Seats)', type: 'table', outlet: true },
+                    { id: 'Table H (6 Seats)', type: 'table', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `SC-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            },
+            main3: {
+                title: 'Main Campus Library (Floor 3)',
+                subtitle: 'Central reading hall with individual thesis archive research desks',
+                prefix: 'Main F3',
+                seats: [
+                    { id: 'Main-101', type: 'desk', outlet: true },
+                    { id: 'Main-102', type: 'desk', outlet: true },
+                    { id: 'Main-103', type: 'desk', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `Main-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            },
+            engineering: {
+                title: 'Engineering Library (Com-Shop Workstations)',
+                subtitle: 'Com-Shop Computer Workstations with CAD & Engineering Software',
+                prefix: 'Engineering',
+                seats: [
+                    { id: 'PC-01', type: 'pc', outlet: true },
+                    { id: 'PC-02', type: 'pc', outlet: true },
+                    { id: 'PC-03', type: 'pc', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `ENG-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            },
+            san_isidro: {
+                title: 'San Isidro Campus Library (Pods & Group Tables)',
+                subtitle: 'Study Workstations & Collaboration Pods',
+                prefix: 'San Isidro',
+                seats: [
+                    { id: 'Pod Alpha', type: 'pod', outlet: true },
+                    { id: 'Pod Beta', type: 'pod', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `SI-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            },
+            museo: {
+                title: 'Museo Archivo (Historical Gallery & Periodicals)',
+                subtitle: 'Historical Gallery & Periodicals Reading Corner',
+                prefix: 'Museo Archivo',
+                seats: [
+                    { id: 'Archive-01', type: 'desk', outlet: true },
+                    { id: 'Archive-02', type: 'desk', outlet: true },
+                    ...Array.from({length: 30}, (_, i) => ({ id: `Museo-${String(i+1).padStart(2, '0')}`, type: 'seat', outlet: true }))
+                ]
+            }
+        };
+        const LOCATION_API_MAP = {
+            lucinda1: 'lucinda-f1',
+            lucinda2: 'lucinda-f2',
+            lucinda3: 'lucinda-f3',
+            student_center: 'student-center',
+            main3: 'main-f3',
+            engineering: 'engineering',
+            san_isidro: 'san-isidro',
+            museo: 'museo'
+        };
+
+        let serverReservations = [];
+        let serverTimeOffset = 0;
+
+        /* --- RESERVATION API (relayed through this site's /api/reservations to studspot-tsu.netlify.app) --- */
+        async function reservationApi(method, { body, query } = {}) {
+            const qs = query ? '?' + new URLSearchParams(query).toString() : '';
+            const res = await fetch('/api/reservations' + qs, {
+                method,
+                cache: 'no-store',
+                headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                body: body ? JSON.stringify(body) : undefined
+            });
+            const type = res.headers.get('content-type') || '';
+            if (!type.includes('application/json')) {
+                throw new Error('Reservation relay missing (HTTP ' + res.status + ')');
+            }
+            return { status: res.status, data: await res.json() };
+        }
+
+        function isRowActive(row) {
+            if (!row || (row.status !== 'pending' && row.status !== 'checked_in')) return false;
+            if (row.sessionDeadline) {
+                const deadline = new Date(row.sessionDeadline).getTime();
+                if (deadline <= Date.now() + serverTimeOffset) return false;
+            }
+            return true;
+        }
+
+        function findActiveReservation(locationKey, seatId) {
+            const remoteLocation = LOCATION_API_MAP[locationKey];
+            return serverReservations.find(r => r.location === remoteLocation && r.seatId === seatId && isRowActive(r));
+        }
+
+        function updateSyncStatus(state) {
+            const el = document.getElementById('sync-status');
+            if (!el) return;
+            if (state === 'online') {
+                el.textContent = 'live';
+                el.className = 'font-mono text-emerald-400';
+            } else {
+                el.textContent = 'reconnecting…';
+                el.className = 'font-mono text-amber-400';
+            }
+        }
+
+        async function refreshReservations() {
+            try {
+                const { status, data } = await reservationApi('GET');
+                if (status !== 200) throw new Error('HTTP ' + status);
+                serverReservations = data.reservations || [];
+                if (data.serverTime) serverTimeOffset = new Date(data.serverTime).getTime() - Date.now();
+                updateSyncStatus('online');
+                renderSeatGrid();
+            } catch (err) {
+                updateSyncStatus('offline');
+            }
+        }
+
+        window.addEventListener('load', () => {
+            updateClock();
+            setInterval(updateClock, 1000);
+            renderSeatGrid();
+            initBarcodeDetectors();
+            startCameraScanner();
+
+            window.addEventListener('keydown', handleUsbBarcodeScanner);
+
+            refreshReservations();
+            setInterval(refreshReservations, 5000);
+
+            syncChannel.onmessage = (event) => {
+                if (event.data && event.data.type === 'SEAT_UPDATE') {
+                    renderSeatGrid();
+                }
+            };
+        });
+        function updateClock() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const clockEl = document.getElementById('live-clock');
+            if (clockEl) clockEl.innerText = timeStr;
+        }
+
+        function changeLocation() {
+            currentLocationKey = document.getElementById('location-select').value;
+            renderSeatGrid();
+        }
+
+        function renderSeatGrid() {
+            const gridContainer = document.getElementById('seats-grid-layout');
+            if (!gridContainer) return;
+
+            const loc = locationsData[currentLocationKey];
+            gridContainer.innerHTML = '';
+
+            loc.seats.forEach(seat => {
+                const reservedBy = findActiveReservation(currentLocationKey, seat.id);
+                const isMine = reservedBy && String(reservedBy.studentNumber) === String(activeStudentId);
+
+                let cardClass = "bg-emerald-950/40 border-emerald-500/40 hover:bg-emerald-900/60 text-emerald-300";
+                let statusText = "Available";
+                let statusBadge = "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+                let icon = "fa-chair";
+
+                if (reservedBy) {
+                    if (isMine) {
+                        cardClass = "bg-amber-950/60 border-amber-500/80 text-amber-200 ring-2 ring-amber-500/40";
+                        statusText = "Your Pass";
+                        statusBadge = "bg-amber-500/20 text-amber-300 border-amber-500/30 font-bold";
+                    } else if (reservedBy.status === 'pending') {
+                        cardClass = "bg-amber-950/40 border-amber-700/50 opacity-85 text-amber-300 cursor-not-allowed";
+                        statusText = "Pending (15m)";
+                        statusBadge = "bg-amber-500/20 text-amber-300 border-amber-500/30";
+                    } else {
+                        cardClass = "bg-red-950/40 border-red-800/40 opacity-75 text-red-300 cursor-not-allowed";
+                        statusText = "Occupied";
+                        statusBadge = "bg-red-500/20 text-red-300 border-red-500/30";
+                    }
+                }
+
+                if (seat.type === 'pc') icon = "fa-desktop";
+                else if (seat.type === 'table') icon = "fa-users";
+                else if (seat.type === 'lab') icon = "fa-flask";
+                else if (seat.type === 'room') icon = "fa-door-closed";
+                else if (seat.type === 'pod') icon = "fa-cubes";
+
+                // Format student ID display: keep first 4 digits and mask the rest with asterisks
+                let maskedStudentId = '';
+                if (reservedBy && reservedBy.studentNumber) {
+                    const rawId = String(reservedBy.studentNumber);
+                    if (rawId.length > 4) {
+                        maskedStudentId = rawId.substring(0, 4) + '*'.repeat(rawId.length - 4);
+                    } else {
+                        maskedStudentId = rawId;
+                    }
+                }
+
+                const cardHtml = `
+                    <div onclick="${reservedBy ? (isMine ? `openTicketModal('${seat.id}')` : '') : `openReserveModal('${seat.id}')`}"
+                         class="touch-active rounded-2xl p-4 border transition-all flex flex-col justify-between h-32 cursor-pointer shadow-lg relative overflow-hidden ${cardClass}">
+                        
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h4 class="font-extrabold text-sm text-white flex items-center gap-1.5">
+                                    <i class="fa-solid ${icon}"></i>
+                                    <span>${seat.id}</span>
+                                </h4>
+                                <p class="text-[10px] opacity-75 mt-0.5">${loc.prefix}</p>
+                            </div>
+                            ${seat.outlet ? '<i class="fa-solid fa-plug text-[10px] text-amber-400"></i>' : ''}
+                        </div>
+
+                        <div class="mt-2 flex justify-between items-center">
+                            <span class="text-[10px] px-2.5 py-1 rounded-full border ${statusBadge}">
+                                ${statusText}
+                            </span>
+                            ${reservedBy ? `<span class="text-[9px] font-mono text-slate-400">By ID: ${maskedStudentId}</span>` : ''}
+                        </div>
+                    </div>
+                `;
+                gridContainer.innerHTML += cardHtml;
+            });
+
+            // Update bottom summary card
+            const currentMyRes = serverReservations.find(r =>
+                r.location === LOCATION_API_MAP[currentLocationKey] &&
+                String(r.studentNumber) === String(activeStudentId) &&
+                isRowActive(r)
+            );
+            const summaryText = document.getElementById('active-reservation-summary');
+            const summaryActions = document.getElementById('active-reservation-actions');
+
+            if (currentMyRes) {
+                userActiveSeat = currentMyRes;
+                summaryText.innerHTML = `<span class="text-emerald-400 font-bold">Reserved ${currentMyRes.seatId}</span> at ${loc.prefix} (${currentMyRes.durationMins || 30} Mins)`;
+                summaryActions.classList.remove('hidden');
+            } else {
+                userActiveSeat = null;
+                summaryText.innerText = "No active seat reserved on this location for your ID.";
+                summaryActions.classList.add('hidden');
+            }
+        }
+
+        /* --- SPOT RESERVATION MODAL FUNCTIONS --- */
+        function openReserveModal(seatId) {
+            const loc = locationsData[currentLocationKey];
+            const seatObj = loc.seats.find(s => s.id === seatId);
+            if (!seatObj) return;
+
+            selectedSpotForModal = seatObj;
+            selectedDurationMins = 30;
+
+            document.getElementById('modal-spot-code').innerText = seatObj.id;
+            document.getElementById('modal-spot-location').innerText = loc.title;
+
+            let typeLabel = "Study Seat";
+            let iconClass = "fa-chair";
+            if (seatObj.type === 'desk') { typeLabel = "Desk Workstation"; iconClass = "fa-chair"; }
+            else if (seatObj.type === 'room') { typeLabel = "Multipurpose Room"; iconClass = "fa-door-closed"; }
+            else if (seatObj.type === 'lab') { typeLabel = "Innovation Lab"; iconClass = "fa-flask"; }
+            else if (seatObj.type === 'table') { typeLabel = "Group Study Table (6 Seats)"; iconClass = "fa-users"; }
+            else if (seatObj.type === 'pc') { typeLabel = "Engineering Computer Workstation"; iconClass = "fa-desktop"; }
+            else if (seatObj.type === 'pod') { typeLabel = "Collaboration Pod"; iconClass = "fa-cubes"; }
+
+            document.getElementById('modal-spot-type').innerText = typeLabel;
+            document.getElementById('modal-spot-icon').className = `fa-solid ${iconClass}`;
+            document.getElementById('custom-duration-input').value = '';
+
+            selectPresetDuration(30);
+
+            document.getElementById('reserve-modal').classList.remove('hidden');
+        }
+
+        function closeReserveModal() {
+            document.getElementById('reserve-modal').classList.add('hidden');
+        }
+
+        function selectPresetDuration(mins) {
+            selectedDurationMins = mins;
+            const buttons = document.querySelectorAll('.duration-btn');
+            buttons.forEach(btn => {
+                btn.className = "duration-btn bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold py-2.5 rounded-xl text-xs transition";
+            });
+
+            const activeBtn = document.getElementById(`duration-btn-${mins}`);            if (activeBtn) {
+                activeBtn.className = "duration-btn bg-emerald-600 text-white border border-emerald-400 font-bold py-2.5 rounded-xl text-xs transition";
+            }
+        }
+
+        function addCustomDuration() {
+            const customVal = parseInt(document.getElementById('custom-duration-input').value, 10);
+            if (isNaN(customVal) || customVal < 1) return;
+            if (customVal > 180) {
+                alert("Maximum allowed duration is 180 minutes (3 hours).");
+                return;
+            }
+            selectedDurationMins = customVal;
+
+            const buttons = document.querySelectorAll('.duration-btn');
+            buttons.forEach(btn => {
+                btn.className = "duration-btn bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold py-2.5 rounded-xl text-xs transition";
+            });
+        }
+
+        async function confirmModalReservation() {
+            if (!selectedSpotForModal) return;
+
+            const confirmBtn = document.querySelector('#reserve-modal button[onclick="confirmModalReservation()"]');
+            if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.classList.add('opacity-60'); }
+
+            const payload = {
+                location: LOCATION_API_MAP[currentLocationKey],
+                seatId: selectedSpotForModal.id,
+                seatType: selectedSpotForModal.type,
+                studentName: activeStudentName,
+                studentNumber: activeStudentId,
+                durationMins: selectedDurationMins
+            };
+
+            try {
+                const res = await reservationApi('POST', { body: payload });
+
+                if (res.status === 409) {
+                    alert('This spot was just reserved by another student on the shared StudSpot network. The radar will refresh now.');
+                    closeReserveModal();
+                    await refreshReservations();
+                    return;
+                }
+                if (res.status < 200 || res.status >= 300) throw new Error('HTTP ' + res.status);
+
+                const reservation = res.data.reservation;
+
+                if (reservation && reservation.status === 'pending') {
+                    await reservationApi('PATCH', { body: { id: reservation.id, studentNumber: activeStudentId } }).catch(() => {});
+                }
+
+                closeReserveModal();
+                await refreshReservations();
+                scrollToContentTop();
+                openTicketModal(selectedSpotForModal.id);
+            } catch (err) {
+                if (String(err && err.message).includes('relay missing')) {
+                    alert('Reservation failed: this kiosk cannot reach the StudSpot reservation service. The site must be deployed from its Git repository (not by drag-and-drop) so the sync connection is included.');
+                } else {
+                    alert('Reservation failed. Please check the connection and try again.');
+                }
+            } finally {
+                if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.classList.remove('opacity-60'); }
+            }
+        }
+
+        async function releaseReservation() {
+            const remoteLocation = LOCATION_API_MAP[currentLocationKey];
+            const mine = serverReservations.filter(r =>
+                r.location === remoteLocation &&
+                String(r.studentNumber) === String(activeStudentId) &&
+                isRowActive(r)
+            );
+
+            if (mine.length === 0) { await refreshReservations(); return; }
+
+            try {
+                for (const row of mine) {
+                    await reservationApi('DELETE', { query: { id: String(row.id), studentNumber: String(activeStudentId) } });
+                }
+            } catch (err) {
+                alert('Could not cancel the pass. Please try again.');
+                return;
+            }
+            await refreshReservations();
+        }
+
+        function initBarcodeDetectors() {
+            if (window.ZXing && ZXing.BrowserMultiFormatReader) {
+                zxingReader = new ZXing.BrowserMultiFormatReader();
+            }
+            if ('BarcodeDetector' in window) {
+                try {
+                    barcodeDetectorNative = new BarcodeDetector({
+                        formats: ['code_128', 'code_39', 'code_93', 'ean_13', 'qr_code', 'codabar']
+                    });
+                } catch (e) {
+                    console.warn("Native BarcodeDetector unavailable:", e);
+                }
+            }
+        }
+
+        function handleUsbBarcodeScanner(e) {
+            const authModal = document.getElementById('kiosk-auth-modal');
+            if (authModal.classList.contains('hidden')) return;
+
+            if (e.key === 'Enter') {
+                if (usbBarcodeBuffer.length >= 5) {
+                    const scannedId = usbBarcodeBuffer.trim();
+                    usbBarcodeBuffer = '';
+                    document.getElementById('kiosk-id-display').value = scannedId;
+                    processStudentLogin(scannedId);
+                }
+                usbBarcodeBuffer = '';
+            } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                usbBarcodeBuffer += e.key;
+                clearTimeout(usbBarcodeTimeout);
+                usbBarcodeTimeout = setTimeout(() => { usbBarcodeBuffer = ''; }, 300);
+            }
+        }
+
+        function openTicketModal(seatId) {
+            const reservationData = findActiveReservation(currentLocationKey, seatId);
+            const duration = reservationData ? (reservationData.durationMins || 30) : 30;
+
+            document.getElementById('ticket-student-name').innerText = activeStudentName;
+            document.getElementById('ticket-student-id').innerText = activeStudentId;
+            document.getElementById('ticket-seat-code').innerText = seatId;
+            document.getElementById('ticket-duration-label').innerText = `Duration: ${duration} Mins`;
+            document.getElementById('ticket-location-tag').innerText = locationsData[currentLocationKey].prefix.toUpperCase();
+            
+            const qrBox = document.getElementById('qrcode-container');
+            qrBox.innerHTML = '';
+            new QRCode(qrBox, {
+                text: `TSU-PASS:${activeStudentId}:${seatId}:${duration}:${Date.now()}`,
+                width: 90,
+                height: 90,
+                colorDark: "#800000",
+                colorLight: "#ffffff"
+            });
+
+            document.getElementById('ticket-modal').classList.remove('hidden');
+        }
+
+        function closeTicketModal() {
+            document.getElementById('ticket-modal').classList.add('hidden');
+        }
+
+        function printKioskTicket() {
+            if (userActiveSeat) openTicketModal(userActiveSeat.seatId);
+            setTimeout(() => window.print(), 300);
+        }
+
+        async function startCameraScanner() {
+            const video = document.getElementById('webcam-preview');
+            const statusLabel = document.getElementById('scanner-status');
+            const permOverlay = document.getElementById('camera-permission-btn-overlay');
+
+            resetScannerUIState();
+
+            if (videoStream) {
+                stopCameraScanner();
+            }
+
+            const cameraConstraints = [
+                { video: { facingMode: { exact: 'environment' } } },
+                { video: { facingMode: 'user' } },
+                { video: true }
+            ];
+
+            let streamStarted = false;
+
+            for (const constraint of cameraConstraints) {
+                try {
+                    videoStream = await navigator.mediaDevices.getUserMedia(constraint);
+                    video.srcObject = videoStream;
+                    await video.play();
+                    isScanning = true;
+                    if (permOverlay) permOverlay.classList.add('hidden');
+                    if (statusLabel) statusLabel.innerText = "Align ID Barcode in Camera View...";
+                    requestAnimationFrame(scanVideoFrame);
+                    streamStarted = true;
+                    break;
+                } catch (e) {
+                    console.warn("Camera constraint failed:", constraint, e);
+                }
+            }
+
+            if (!streamStarted) {
+                if (statusLabel) statusLabel.innerText = "Camera Offline • Use Keypad to Enter ID";
+                if (permOverlay) permOverlay.classList.remove('hidden');
+            }
+        }
+
+        async function requestCameraAccessExplicit() {
+            const permOverlay = document.getElementById('camera-permission-btn-overlay');
+            if (permOverlay) permOverlay.classList.add('hidden');
+            await startCameraScanner();
+        }
+
+        async function scanVideoFrame() {
+            if (!isScanning) return;
+            const video = document.getElementById('webcam-preview');
+            const canvas = document.getElementById('scan-canvas');
+            const context = canvas.getContext('2d');
+            const statusLabel = document.getElementById('scanner-status');
+            const liveTracker = document.getElementById('live-decoded-id');
+            const confirmBadge = document.getElementById('scan-confirm-badge');
+
+            if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.height = video.videoHeight;
+                canvas.width = video.videoWidth;
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                let rawCode = null;
+
+                if (barcodeDetectorNative) {
+                    try {
+                        const detectedBarcodes = await barcodeDetectorNative.detect(canvas);
+                        if (detectedBarcodes && detectedBarcodes.length > 0) {
+                            rawCode = detectedBarcodes[0].rawValue.trim();
+                        }
+                    } catch (err) {}
+                }
+
+                if (!rawCode && zxingReader) {
+                    try {
+                        const imgLuminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+                        const binaryBitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(imgLuminanceSource));
+                        const result = zxingReader.decodeBitmap(binaryBitmap);
+                        if (result && result.getText()) {
+                            rawCode = result.getText().trim();
+                        }
+                    } catch (zxErr) {}
+                }
+
+                if (rawCode && rawCode !== lastDetectedCode) {
+                    lastDetectedCode = rawCode;
+                    liveTracker.innerText = rawCode;
+                    statusLabel.innerText = `Decoded Code: ${rawCode}`;
+                    confirmBadge.className = "bg-emerald-950/80 text-emerald-300 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-emerald-500/50 flex items-center gap-1.5 animate-pulse";
+                    confirmBadge.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-400"></i> Code Detected! Logging in...`;
+
+                    setTimeout(() => processStudentLogin(rawCode), 600);
+                    return;
+                }
+            }
+            requestAnimationFrame(scanVideoFrame);
+        }
+
+        function stopCameraScanner() {
+            isScanning = false;
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+        }
+
+        function resetScannerUIState() {
+            lastDetectedCode = null;
+            
+            const liveTracker = document.getElementById('live-decoded-id');
+            if (liveTracker) liveTracker.innerText = '-- SCANNING --';
+
+            const scannerStatus = document.getElementById('scanner-status');
+            if (scannerStatus) scannerStatus.innerText = 'Align ID Barcode in Camera View...';
+
+            const confirmBadge = document.getElementById('scan-confirm-badge');
+            if (confirmBadge) {
+                confirmBadge.className = 'bg-slate-800 text-slate-400 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-slate-700 flex items-center gap-1.5';
+                confirmBadge.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-amber-400"></i> Waiting for barcode...';
+            }
+
+            const keypadDisplay = document.getElementById('kiosk-id-display');
+            if (keypadDisplay) keypadDisplay.value = '';
+        }
+
+        function processStudentLogin(idCode) {
+            activeStudentId = idCode;
+            
+            if (studentDatabase[idCode]) {
+                activeStudentName = studentDatabase[idCode].name;
+                activeStudentInitials = studentDatabase[idCode].initials;
+            } else {
+                activeStudentName = `Student ${idCode}`;
+                activeStudentInitials = idCode.substring(0, 2).toUpperCase();
+            }
+
+            document.getElementById('sidebar-user-id').innerText = activeStudentId;
+            document.getElementById('sidebar-user-name').innerText = activeStudentName;
+            document.getElementById('user-avatar-badge').innerText = activeStudentInitials;
+            document.getElementById('top-avatar-badge').innerText = activeStudentInitials;
+
+            stopCameraScanner();
+            document.getElementById('kiosk-auth-modal').classList.add('hidden');
+            closeSidebar();
+            renderSeatGrid();
+        }
+
+        function clearSessionAndExit() {
+            activeStudentId = '';
+            activeStudentName = '';
+            activeStudentInitials = '--';
+
+            resetScannerUIState();
+            usbBarcodeBuffer = '';
+            reOpenAuthModal();
+        }
+
+        function appendNumpad(val) {
+            const display = document.getElementById('kiosk-id-display');
+            if (display.value.length < 10) display.value += val;
+        }
+
+        function clearNumpad() {
+            document.getElementById('kiosk-id-display').value = '';
+        }
+
+        function backspaceNumpad() {
+            const display = document.getElementById('kiosk-id-display');
+            display.value = display.value.slice(0, -1);
+        }
+
+        function submitNumpadLogin() {
+            const val = document.getElementById('kiosk-id-display').value.trim();
+            if (val.length < 5) return;
+            processStudentLogin(val);
+        }
+
+        function reOpenAuthModal() {
+            resetScannerUIState();
+            document.getElementById('kiosk-auth-modal').classList.remove('hidden');
+            startCameraScanner();
+        }
+
+        function closeSidebar() {
+            const sidebar = document.getElementById('app-sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            sidebar.classList.add('-translate-x-full');
+            backdrop.classList.add('hidden');
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('app-sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            const isHidden = sidebar.classList.contains('-translate-x-full');
+            if (isHidden) {
+                sidebar.classList.remove('-translate-x-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                closeSidebar();
+            }
+        }
+
+        function scrollToContentTop() {
+            const contentArea = document.querySelector('main > .flex-1.p-4');
+            if (contentArea) contentArea.scrollTop = 0;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
